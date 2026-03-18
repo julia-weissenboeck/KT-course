@@ -3,10 +3,12 @@ NiceGUI-Oberfläche des App-Launchers: hierarchische Liste, Start-Buttons, E-Mai
 """
 from __future__ import annotations
 
+import os
 import shutil
 import subprocess
 import sys
 from pathlib import Path
+from typing import Callable
 
 from nicegui import ui
 
@@ -14,6 +16,8 @@ from .widgets import Banner
 from .scan import ChapterGroup, LabEntry, scan_labs
 from . import submit
 from . import port_check
+from . import git_ops
+from . import submission_copy
 
 # lab_suite = Parent von app_launcher
 LAB_SUITE_ROOT = Path(__file__).resolve().parent.parent
@@ -22,12 +26,17 @@ INSTRUCTOR_KEY_PATH = LAB_SUITE_ROOT / ".instructor_key"
 
 
 def _launch_app(entry: LabEntry) -> None:
-    """Startet NiceGUI-App als Subprocess (python -m labs.xxx)."""
+    """Startet NiceGUI-App als Subprocess (python -m labs.xxx). Bei Studierenden: App lädt Code aus submissions/."""
+    env = os.environ.copy()
+    if not _is_instructor_mode():
+        submission_copy.ensure_app_submission_files(entry.folder_name)
+        env["USE_SUBMISSIONS"] = "1"
     cmd = [sys.executable, "-m", entry.run_target]
     try:
         subprocess.Popen(
             cmd,
             cwd=str(LAB_SUITE_ROOT),
+            env=env,
             creationflags=subprocess.CREATE_NEW_CONSOLE if sys.platform == "win32" else 0,
         )
         ui.notify(f"App wird gestartet: {entry.run_target}", type="positive")
@@ -36,15 +45,44 @@ def _launch_app(entry: LabEntry) -> None:
 
 
 def _launch_script(entry: LabEntry) -> None:
-    """Startet Skript als Subprocess (python labs/.../file.py)."""
-    cmd = [sys.executable, entry.run_target]
+    """Startet Skript (oder öffnet Notebook). Studierende: Alle .py/.ipynb des Ordners → submissions/, dann diese Datei."""
+    script_name = Path(entry.run_target).name
+    if _is_instructor_mode():
+        to_run = LAB_SUITE_ROOT / entry.run_target
+    else:
+        submission_copy.ensure_all_task_script_copies(entry.folder_name)
+        path = submission_copy.ensure_submission_copy(entry.folder_name, script_name)
+        if path is None:
+            to_run = LAB_SUITE_ROOT / entry.run_target
+        else:
+            to_run = path
+    if not to_run.is_file():
+        ui.notify(f"Datei nicht gefunden: {to_run.name}", type="negative")
+        return
     try:
-        subprocess.Popen(
-            cmd,
-            cwd=str(LAB_SUITE_ROOT),
-            creationflags=subprocess.CREATE_NEW_CONSOLE if sys.platform == "win32" else 0,
-        )
-        ui.notify(f"Skript wird gestartet: {entry.run_target}", type="positive")
+        if to_run.suffix == ".ipynb":
+            # Jupyter starten mit Notebook aus submissions/ → öffnet im Browser ohne Navigation
+            try:
+                subprocess.Popen(
+                    [sys.executable, "-m", "jupyter", "notebook", str(to_run)],
+                    cwd=str(LAB_SUITE_ROOT),
+                    creationflags=subprocess.CREATE_NEW_CONSOLE if sys.platform == "win32" else 0,
+                )
+                ui.notify(f"Jupyter startet mit Notebook: {to_run.name}", type="positive")
+            except Exception:
+                ok, msg = submit.open_file_with_default_app(to_run)
+                if ok:
+                    ui.notify(f"Notebook geöffnet: {to_run.name}", type="positive")
+                else:
+                    ui.notify(msg or "Jupyter nicht gefunden – Notebook mit Standard-App öffnen.", type="warning")
+        else:
+            cmd = [sys.executable, str(to_run)]
+            subprocess.Popen(
+                cmd,
+                cwd=str(LAB_SUITE_ROOT),
+                creationflags=subprocess.CREATE_NEW_CONSOLE if sys.platform == "win32" else 0,
+            )
+            ui.notify(f"Skript wird gestartet: {to_run.name}", type="positive")
     except Exception as e:
         ui.notify(f"Starten fehlgeschlagen: {e}", type="negative")
 
@@ -52,17 +90,24 @@ def _launch_script(entry: LabEntry) -> None:
 def _launch(entry: LabEntry) -> None:
     if entry.kind == "app":
         _launch_app(entry)
-    else:
+    elif entry.kind in ("script", "notebook"):
         _launch_script(entry)
 
 
 def _open_script_in_editor(entry: LabEntry) -> None:
-    """Öffnet das zum Eintrag gehörige Python-Skript im Standard-Editor (z. B. VS Code)."""
-    if entry.kind != "script":
+    """Öffnet Skript oder Notebook im Editor. Studierende: Alle .py/.ipynb des Ordners → submissions/, dann diese Datei."""
+    if entry.kind not in ("script", "notebook"):
         return
-    script_path = LAB_SUITE_ROOT / entry.run_target
+    script_name = Path(entry.run_target).name
+    if _is_instructor_mode():
+        script_path = LAB_SUITE_ROOT / entry.run_target
+    else:
+        submission_copy.ensure_all_task_script_copies(entry.folder_name)
+        script_path = submission_copy.ensure_submission_copy(entry.folder_name, script_name)
+        if script_path is None:
+            script_path = LAB_SUITE_ROOT / entry.run_target
     if not script_path.is_file():
-        ui.notify(f"Datei nicht gefunden: {script_path}", type="negative")
+        ui.notify(f"Datei nicht gefunden: {script_path.name}", type="negative")
         return
     ok, msg = submit.open_file_with_default_app(script_path)
     if ok:
@@ -79,12 +124,18 @@ def _get_app_user_template_path(folder_name: str) -> Path | None:
 
 
 def _open_app_user_template(entry: LabEntry) -> None:
-    """Öffnet assignments/user_template.py der App im Standard-Editor (für Studierende zum Ergänzen)."""
+    """Öffnet user_template.py im Editor. Studierende: Kopie in submissions/ wird geöffnet."""
     if entry.kind != "app":
         return
-    template_path = _get_app_user_template_path(entry.folder_name)
-    if not template_path:
-        ui.notify("assignments/user_template.py nicht gefunden.", type="warning")
+    if _is_instructor_mode():
+        template_path = _get_app_user_template_path(entry.folder_name)
+    else:
+        submission_copy.ensure_app_submission_files(entry.folder_name)
+        template_path = LABS_DIR / entry.folder_name / "submissions" / "user_template.py"
+        if not template_path.is_file():
+            template_path = _get_app_user_template_path(entry.folder_name)
+    if not template_path or not template_path.is_file():
+        ui.notify("user_template.py nicht gefunden.", type="warning")
         return
     ok, msg = submit.open_file_with_default_app(template_path)
     if ok:
@@ -611,8 +662,119 @@ def _on_free_port(port: int, pid: int) -> None:
         ui.notify("Port konnte nicht freigegeben werden (evtl. fehlen Rechte).", type="negative")
 
 
+def _show_git_output_in_container(container: ui.column, cmd_str: str, stdout: str, stderr: str) -> None:
+    """Füllt den Container mit Befehl und Ausgabe (scrollbar)."""
+    container.clear()
+    with container:
+        ui.label("Ausgeführter Befehl:").classes("text-caption text-weight-bold")
+        ui.html(
+            f'<pre class="q-pa-sm bg-grey-3 rounded-borders" style="white-space:pre-wrap;max-height:120px;overflow:auto;font-size:0.85em;">{_escape_html(cmd_str)}</pre>'
+        )
+        ui.label("Ausgabe:").classes("text-caption text-weight-bold q-mt-sm")
+        combined = (stdout + "\n" + stderr).strip() or "(leer)"
+        ui.html(
+            f'<pre class="q-pa-sm bg-grey-3 rounded-borders" style="white-space:pre-wrap;max-height:280px;overflow:auto;font-size:0.85em;">{_escape_html(combined)}</pre>'
+        )
+
+
+def _escape_html(s: str) -> str:
+    return (s.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;").replace('"', "&quot;"))
+
+
+def _build_git_expansion() -> None:
+    """Expansion am Anfang: Git Status, Log, Remote, Pull – Befehl und Ausgabe sichtbar."""
+    repo_root = git_ops.get_repo_root(LAB_SUITE_ROOT)
+    with ui.expansion("Git (Status, Log, Remote, Pull)", value=False).classes("w-full q-mb-md"):
+        if repo_root is None:
+            ui.label("Kein Git-Repo erkannt (oder git nicht im PATH).").classes("text-body2 text-grey-7")
+            return
+        ui.label(f"Repo: {repo_root}").classes("text-caption text-grey-7 q-mb-sm")
+        git_output_container = ui.column().classes("w-full")
+        ui.label("Klicke einen Button – ausgeführter Befehl und Ausgabe erscheinen unten.").classes(
+            "text-caption text-grey-7 q-mb-xs"
+        )
+
+        def run_and_show(args: list[str], description: str) -> None:
+            ok, out, err, cmd = git_ops.run_git(args, repo_root)
+            _show_git_output_in_container(git_output_container, cmd, out, err)
+            if ok:
+                ui.notify(f"{description}: OK", type="positive")
+            else:
+                ui.notify(f"{description}: Fehler", type="warning")
+
+        with ui.row().classes("q-gutter-sm wrap"):
+            ui.button("Git Status", on_click=lambda: run_and_show(["status"], "Git Status")).props(
+                "flat dense color=secondary"
+            )
+            ui.button(
+                "Git Log (-10)",
+                on_click=lambda: run_and_show(
+                    ["log", "-10", "--format=%h %ad %s", "--date=short"],
+                    "Git Log",
+                ),
+            ).props("flat dense color=secondary").tooltip("Hash, Datum, Betreff (--date=short)")
+            ui.button("Git Remote", on_click=lambda: run_and_show(["remote", "-v"], "Git Remote")).props(
+                "flat dense color=secondary"
+            )
+            def do_pull() -> None:
+                ok_b, out, _, _ = git_ops.run_git(["rev-parse", "--abbrev-ref", "HEAD"], repo_root)
+                branch = out.strip() if ok_b and out.strip() else "main"
+                run_and_show(["pull", "upstream", branch, "--no-edit"], "Pull upstream")
+
+            ui.button("Pull (upstream)", on_click=do_pull).props("flat dense color=primary").tooltip(
+                "git pull upstream <aktueller Branch> – Remote 'upstream' muss existieren"
+            )
+        ui.separator().classes("q-my-sm")
+        with git_output_container:
+            ui.label("(Befehl und Ausgabe nach Klick auf einen der Buttons oben)").classes(
+                "text-caption text-grey-6"
+            )
+
+
+def _show_git_push_dialog(folder_name: str, on_close: Callable[[], None] | None = None) -> None:
+    """Dialog: Git add/commit/push für submissions-Ordner; zeigt ausgeführte Befehle und Ausgabe.
+    on_close wird beim Schließen des Dialogs aufgerufen (z. B. um die Seite neu zu laden)."""
+    repo_root = git_ops.get_repo_root(LAB_SUITE_ROOT)
+    if repo_root is None:
+        ui.notify("Kein Git-Repo erkannt.", type="warning")
+        return
+    ok, msg, steps = git_ops.push_submissions_folder(repo_root, folder_name)
+    lines: list[str] = []
+    for cmd, out, err in steps:
+        lines.append(f"$ {cmd}")
+        if out:
+            lines.append(out)
+        if err:
+            lines.append(err)
+        lines.append("")
+    text = "\n".join(lines).strip()
+    with ui.dialog() as d, ui.card().classes("q-pa-md min-w-[360px] max-w-[90vw] max-h-[85vh] overflow-auto"):
+        ui.label("Git Push (Abgabe)").classes("text-subtitle1 text-weight-medium")
+        ui.label(folder_name).classes("text-caption text-grey-7 q-mb-sm")
+        if ok:
+            ui.label(msg).classes("text-body2 text-green-8")
+        else:
+            ui.label(msg).classes("text-body2 text-red-8")
+        ui.label("Ausgeführte Befehle und Ausgabe:").classes("text-caption text-weight-bold q-mt-sm")
+        ui.html(
+            f'<pre class="q-pa-sm bg-grey-3 rounded-borders" style="white-space:pre-wrap;max-height:320px;overflow:auto;font-size:0.85em;">{_escape_html(text)}</pre>'
+        )
+
+        def close_and_callback() -> None:
+            d.close()
+            if on_close:
+                on_close()
+
+        ui.button("Schließen", on_click=close_and_callback).props("flat color=primary").classes("q-mt-sm")
+    d.open()
+    if ok:
+        ui.notify("Push erfolgreich.", type="positive")
+    else:
+        ui.notify(msg, type="negative")
+
+
 def build_ui() -> None:
-    """Baut die Launcher-UI: Kapitel-Gruppen, Einträge mit Start-Button, Submit-Zeile pro Lab."""
+    """Baut die Launcher-UI: Git-Expansion, Kapitel-Gruppen, Einträge mit Start-Button, Submit-Zeile pro Lab."""
     chapters = scan_labs(LABS_DIR)
     if not chapters:
         ui.label("Keine Labs gefunden. Bitte lab_suite/labs/ prüfen.").classes("text-weight-medium")
@@ -620,6 +782,8 @@ def build_ui() -> None:
 
     instructor_mode = _is_instructor_mode()
     submit_email = submit.read_submit_to_email(LAB_SUITE_ROOT)
+
+    _build_git_expansion()
 
     ui.label("Verfügbare Labs und Skripte").classes("text-h5 q-mb-md")
     ui.label("Klicke auf „Starten“, um eine App (Browser) oder ein Skript (Konsole/Matplotlib) zu starten.").classes(
@@ -651,6 +815,10 @@ def build_ui() -> None:
                                     ui.icon("web", size="sm").classes("text-primary")
                                 elif entry.kind == "script":
                                     ui.icon("code", size="sm").classes("text-secondary")
+                                elif entry.kind == "notebook":
+                                    ui.icon("menu_book", size="sm").classes("text-deep-purple").tooltip(
+                                        "Jupyter-Notebook"
+                                    )
                                 else:
                                     ui.icon("description", size="sm").classes("text-grey-7").tooltip(
                                         "Dokumentenabgabe (keine Programmieraufgabe)"
@@ -681,17 +849,19 @@ def build_ui() -> None:
                                     if reminder:
                                         msg, color = reminder
                                         ui.label(msg).classes(f"text-caption text-weight-medium {color}")
-                                if entry.kind in ("script", "app") and _get_doc_md_path(entry.folder_name):
+                                if entry.kind in ("script", "notebook", "app") and _get_doc_md_path(entry.folder_name):
                                     ui.button(
                                         icon="menu_book",
                                         on_click=lambda fn=entry.folder_name: _show_doc_dialog(fn),
                                     ).props("flat dense round color=secondary").tooltip("Erklärung (doc.md) im Browser anzeigen")
-                                if entry.kind == "script":
+                                if entry.kind in ("script", "notebook"):
                                     ui.button(
                                         "EDIT",
                                         icon="edit",
                                         on_click=lambda e=entry: _open_script_in_editor(e),
-                                    ).props("flat dense color=secondary").tooltip("Skript im Editor öffnen (z. B. VS Code)")
+                                    ).props("flat dense color=secondary").tooltip(
+                                        "Skript/Notebook im Editor öffnen (z. B. VS Code, Jupyter)"
+                                    )
                                 elif entry.kind == "app" and _get_app_user_template_path(entry.folder_name):
                                     ui.button(
                                         "EDIT",
@@ -734,22 +904,20 @@ def build_ui() -> None:
                                 extras = _task_markdown_extras()
                                 ui.markdown(task_content, extras=extras).classes("q-pa-sm bg-white rounded-borders")
 
-                        # SUBMIT-Checkbox: Aufgabe als erledigt markieren (State in submissions/task_done.txt, session-übergreifend + per Git sichtbar)
+                        # SUBMIT + GIT PUSH: Bei Check → task_done setzen und Git Push ausführen (Dialog bleibt offen bis Nutzer schließt); bei Uncheck nur task_done löschen
                         def _on_submit_check(folder: str, value: bool) -> None:
                             if value:
                                 if not _write_task_done(folder):
                                     ui.notify("Speichern fehlgeschlagen.", type="negative")
                                     return
                                 ui.notify("Als erledigt gespeichert (Abgabe am " + _read_task_done(folder) + ").", type="positive")
+                                _show_git_push_dialog(folder, on_close=lambda: ui.run_javascript("window.location.reload()"))
                             else:
-                                # Uncheck: task_done.txt löschen, Karte wird nach Reload wieder weiß
                                 _clear_task_done(folder)
                                 ui.notify("Markierung entfernt.", type="info")
-                            ui.run_javascript("window.location.reload()")
+                                ui.run_javascript("window.location.reload()")
 
                         with ui.row().classes("items-center q-gutter-sm full-width q-mt-sm q-pt-sm border-top"):
-                            # on_change muss im Konstruktor übergeben werden (NiceGUI registriert es sonst nicht).
-                            # fn=folder_name bindet den Ordner pro Karte. Neuer Wert aus e.args oder e.sender.value.
                             def _submit_check_handler(e, fn=folder_name):
                                 val = True
                                 if getattr(e, "args", None) is not None and len(e.args) > 0:
@@ -759,7 +927,7 @@ def build_ui() -> None:
                                 _on_submit_check(fn, val)
 
                             submit_check = ui.checkbox(
-                                "SUBMIT (als erledigt markieren)",
+                                "SUBMIT + GIT PUSH (auf GIT sichern und als erledigt markieren)",
                                 value=bool(task_done_date),
                                 on_change=_submit_check_handler,
                             )

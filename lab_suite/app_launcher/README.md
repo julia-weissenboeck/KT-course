@@ -20,6 +20,10 @@ python lab_suite/scripts/free_port_8082.py
 .\free_port_8082.ps1
 ```
 
+**Git (Expansion am Anfang):** Oben erscheint eine Expansion **„Git (Status, Log, Remote, Pull)“**. Buttons: **Git Status** (Ausgabe von `git status`), **Git Log (-10)** (`git log --oneline -10`), **Git Remote** (`git remote -v`), **Pull (upstream)** (`git pull upstream <Branch>`). Der jeweils ausgeführte Befehl und die Konsolenausgabe werden darunter in einem scrollbaren Bereich angezeigt. So sehen Studierende genau, welches Kommando ausgeführt wurde.
+
+**SUBMIT + GIT PUSH:** In jeder Aufgabenkarte mit submissions-Ordner gibt es eine Checkbox **„SUBMIT + GIT PUSH (auf GIT sichern und als erledigt markieren)“**. Beim **Anhaken** wird die Aufgabe als erledigt gespeichert (task_done.txt) **und** automatisch der Git-Push ausgeführt (add, commit, push für den submissions-Ordner). Ein Dialog zeigt die ausgeführten Befehle und die Ausgabe. Beim **Abhaken** wird nur die Markierung entfernt (kein Push). Voraussetzung: Projekt liegt in einem Git-Repo (z. B. Studenten-Fork).
+
 ## Erkennung
 
 Es wird **für jeden Unterordner** unter `labs/` mindestens eine **Task-Card** erzeugt. Drei Fälle:
@@ -45,7 +49,7 @@ Pro Aufgabenstellung (Lab) gibt es zusätzlich im Launcher eine Zeile **Abgabe (
 
 - **ZIP erstellen** – packt den Inhalt von `submissions/` in `abgabe_<Lab>_<datum>.zip` im gleichen Ordner.
 - **Ordner öffnen** – öffnet den Dateimanager (Explorer/Finder) im `submissions/`-Ordner; Studierende können das ZIP auswählen und in die E-Mail ziehen.
-- **E-Mail öffnen** – öffnet den Standard-Mail-Client mit Zieladresse und Betreff `[kt-assignment] ID=<Lab-Name>`.
+- **E-Mail öffnen** – öffnet den Standard-Mail-Client mit Zieladresse und Betreff `[kt-assignments] ID=<Lab-Name>`.
 
 **Zieladresse (repo-weit):** In **`lab_suite/submit_manifest.txt`** wird die Instructor-Adresse hinterlegt (eine Zeile, Format `submit_to_email=adresse@example.com`). Der Launcher liest diese Datei; ohne Eintrag ist „E-Mail öffnen“ deaktiviert.
 

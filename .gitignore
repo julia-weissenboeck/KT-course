@@ -4,6 +4,7 @@ venv/
 env/
 ENV/
 
+
 # Python cache files
 __pycache__/
 *.py[cod]
@@ -44,8 +45,9 @@ coverage.xml
 .hypothesis/
 .pytest_cache/
 
-# Jupyter Notebook
-.ipynb_checkpoints
+# Jupyter Notebook (Checkpoint-Ordner nicht versionieren)
+.ipynb_checkpoints/
+**/.ipynb_checkpoints/
 
 # VS Code
 .vscode/
@@ -67,6 +69,8 @@ coverage.xml
 !**/submissions/answers.md
 !**/submissions/answers.txt
 !**/submissions/answers.docx
+!**/submissions/canvas_export.json
+!**/submissions/palette.json
 
 # Instructor key (nicht ins Studenten-Repo exportieren)
 .instructor_key
@@ -74,6 +78,13 @@ lab_suite/.instructor_key
 
 # Launcher: lokaler UI-State (welche Kapitel-Expansions offen/zu)
 lab_suite/launcher_expansion_state.json
+app_fpc1500/fpc1500_config.json
+app_pluto/config.json
+hackrf-driver/server/hackrf_client_config.json
+
+# Pluto: lokale libiio-Bibliotheken (nur README wird versioniert)
+pluto/libiio/*.dll
+pluto/libiio/*.so
 
 # Node.js / Frontend
 node_modules/

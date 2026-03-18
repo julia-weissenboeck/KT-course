@@ -10,4 +10,9 @@ c) Tablet (Android)
 d) iPad (iPadOS)
 e) Sonstiges: _______
 
+<<<<<<< HEAD
 a
+=======
+a) Lenovo
+d) iPad
+>>>>>>> upstream/main
